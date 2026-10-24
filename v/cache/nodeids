@@ -1,0 +1,5 @@
+[
+  "backend/tests/test_live_captions.py::test_fake_live_stt_provider_streaming",
+  "backend/tests/test_live_captions.py::test_live_caption_rest_endpoints",
+  "backend/tests/test_live_captions.py::test_live_captions_websocket"
+]

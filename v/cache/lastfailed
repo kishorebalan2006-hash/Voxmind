@@ -1,0 +1,3 @@
+{
+  "backend/tests/test_live_captions.py::test_live_captions_websocket": true
+}

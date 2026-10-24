@@ -1,0 +1,198 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper Functions ────────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isUser(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isOrgMember(orgId) {
+      return isAuthenticated() && (
+        orgId == 'default-org' ||
+        orgId == 'org_' + request.auth.uid ||
+        exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId == orgId)
+      );
+    }
+
+    function getOrgMemberRole(orgId) {
+      return exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/organizations/$(orgId)/members/$(request.auth.uid)).data.role
+        : (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+            : 'admin');
+    }
+
+    function isOrgAdmin(orgId) {
+      return isOrgMember(orgId) && (
+        getOrgMemberRole(orgId) == 'admin' || 
+        getOrgMemberRole(orgId) == 'owner'
+      );
+    }
+
+    function isSelfJoiningMeeting(orgId) {
+      let profilePath = /databases/$(database)/documents/users/$(request.auth.uid);
+      let beforeIds = resource.data.get('participantIds', []);
+      let afterIds = request.resource.data.get('participantIds', []);
+      let beforeParticipants = resource.data.get('participants', []);
+      let afterParticipants = request.resource.data.get('participants', []);
+      let participant = {
+        'userId': request.auth.uid,
+        'displayName': get(profilePath).data.get('displayName', ''),
+        'speakerLabel': null,
+        'email': get(profilePath).data.get('email', '')
+      };
+
+      return isOrgMember(orgId) &&
+        exists(profilePath) &&
+        resource.data.status in ['draft', 'scheduled', 'recording'] &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['participantIds', 'participants', 'updatedAt']) &&
+        beforeIds is list &&
+        afterIds is list &&
+        afterIds.size() == beforeIds.size() + 1 &&
+        afterIds.hasAll(beforeIds) &&
+        afterIds.hasAny([request.auth.uid]) &&
+        !beforeIds.hasAny([request.auth.uid]) &&
+        beforeParticipants is list &&
+        afterParticipants is list &&
+        afterParticipants.size() == beforeParticipants.size() + 1 &&
+        afterParticipants.hasAll(beforeParticipants) &&
+        afterParticipants.hasAny([participant]) &&
+        !beforeParticipants.hasAny([participant]) &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    // ── User Profiles (Root Collection) ─────────────────────────────
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isUser(userId);
+      allow delete: if isUser(userId);
+    }
+
+    // ── Organizations (Multi-Tenant Root) ───────────────────────────
+    match /organizations/{organizationId} {
+      allow get: if isAuthenticated();
+      allow list: if isOrgMember(organizationId);
+      allow create: if isAuthenticated();
+      allow update, delete: if isOrgAdmin(organizationId);
+
+      // ── Organization Members Subcollection ────────────────────────
+      match /members/{memberId} {
+        allow read: if isOrgMember(organizationId) || (isAuthenticated() && request.auth.uid == memberId);
+        allow create, update: if isAuthenticated() && (request.auth.uid == memberId || isOrgAdmin(organizationId));
+        allow delete: if isOrgAdmin(organizationId);
+      }
+
+      // ── Meetings Subcollection ────────────────────────────────────
+      match /meetings/{meetingId} {
+        // Read: Any authorized organization member
+        allow read: if isOrgMember(organizationId);
+
+        // Create: Authorized org member setting correct org and creator IDs
+        allow create: if isOrgMember(organizationId) &&
+          request.resource.data.organizationId == organizationId &&
+          (request.resource.data.createdById == request.auth.uid || request.resource.data.createdBy == request.auth.uid);
+
+        // Update: Org admin or meeting creator, keeping organizationId immutable
+        allow update: if isOrgMember(organizationId) &&
+          request.resource.data.organizationId == resource.data.organizationId &&
+          (
+            isOrgAdmin(organizationId) ||
+            resource.data.createdById == request.auth.uid ||
+            resource.data.createdBy == request.auth.uid ||
+            isSelfJoiningMeeting(organizationId)
+          );
+
+        // Delete: Org admin or meeting creator
+        allow delete: if isOrgAdmin(organizationId) ||
+          (isOrgMember(organizationId) && (resource.data.createdById == request.auth.uid || resource.data.createdBy == request.auth.uid));
+
+        // ── Action Items Subcollection ──────────────────────────────
+        match /actionItems/{actionItemId} {
+          allow read, write: if isOrgMember(organizationId);
+        }
+
+        // ── Decisions Subcollection ─────────────────────────────────
+        match /decisions/{decisionId} {
+          allow read, write: if isOrgMember(organizationId);
+        }
+
+        // ── Transcript Segments Subcollection ───────────────────────
+        match /transcriptSegments/{segmentId} {
+          allow read, write: if isOrgMember(organizationId);
+        }
+
+        // ── Transcripts Subcollection ───────────────────────────────
+        match /transcripts/{segmentId} {
+          allow read, write: if isOrgMember(organizationId);
+        }
+
+        // ── Reports Subcollection ───────────────────────────────────
+        match /reports/{reportId} {
+          allow read, write: if isOrgMember(organizationId);
+        }
+      }
+
+      // ── Top-level Organization Action Items ───────────────────────
+      match /actionItems/{actionItemId} {
+        allow read, write: if isOrgMember(organizationId);
+      }
+
+      // ── Top-level Organization Decisions ──────────────────────────
+      match /decisions/{decisionId} {
+        allow read, write: if isOrgMember(organizationId);
+      }
+
+      // ── Organization Notifications ────────────────────────────────
+      match /notifications/{notificationId} {
+        allow read: if isOrgMember(organizationId) &&
+          (resource.data.userId == request.auth.uid || resource.data.userId == null);
+        allow write: if isOrgAdmin(organizationId);
+      }
+
+      // ── Subscription Subcollection ────────────────────────────────
+      match /subscription/{docId} {
+        allow read: if isOrgMember(organizationId);
+        allow write: if isOrgAdmin(organizationId);
+      }
+
+      // ── Usage Subcollection ───────────────────────────────────────
+      match /usage/{docId} {
+        allow read: if isOrgMember(organizationId);
+        allow write: if isOrgAdmin(organizationId);
+      }
+
+      // ── Audit Logs ────────────────────────────────────────────────
+      match /auditLogs/{logId} {
+        allow read: if isOrgAdmin(organizationId);
+        allow create: if isOrgMember(organizationId);
+        allow update, delete: if false;
+      }
+    }
+
+    // ── Root-Level Meetings Collection (Legacy fallback) ───────────
+    match /meetings/{meetingId} {
+      allow read: if isOrgMember(resource.data.organizationId);
+      allow create: if isOrgMember(request.resource.data.organizationId) &&
+        (request.resource.data.createdById == request.auth.uid || request.resource.data.createdBy == request.auth.uid);
+      allow update: if isOrgMember(resource.data.organizationId) &&
+        request.resource.data.organizationId == resource.data.organizationId &&
+        (
+          isOrgAdmin(resource.data.organizationId) ||
+          resource.data.createdById == request.auth.uid ||
+          resource.data.createdBy == request.auth.uid ||
+          isSelfJoiningMeeting(resource.data.organizationId)
+        );
+      allow delete: if isOrgAdmin(resource.data.organizationId) ||
+        (isOrgMember(resource.data.organizationId) && (resource.data.createdById == request.auth.uid || resource.data.createdBy == request.auth.uid));
+    }
+  }
+}

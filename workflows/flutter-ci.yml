@@ -1,0 +1,57 @@
+name: Flutter CI
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'voxmind/**'
+      - '.github/workflows/flutter-ci.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'voxmind/**'
+      - '.github/workflows/flutter-ci.yml'
+
+jobs:
+  flutter-quality-gate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: voxmind
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Check Formatting
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze Code
+        run: flutter analyze lib/
+
+      - name: Run Test Suite
+        run: flutter test
+
+      - name: Build Web Release
+        run: flutter build web --no-tree-shake-icons
+
+      - name: Upload Web Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: voxmind-web-bundle
+          path: voxmind/build/web

@@ -1,0 +1,17 @@
+# Global Codeowners for VoxMind
+* @voxmind-core-team
+
+# Frontend Core & Presentation
+/voxmind/ @voxmind-frontend-leads
+
+# Backend Core & API Routes
+/backend/ @voxmind-backend-leads
+
+# Security & Firebase Rules
+/firestore.rules @voxmind-security-team
+/storage.rules @voxmind-security-team
+/backend/app/api/dependencies/auth.py @voxmind-security-team
+/backend/app/api/middleware/security_headers.py @voxmind-security-team
+
+# CI / CD Workflows
+/.github/workflows/ @voxmind-devops-team
